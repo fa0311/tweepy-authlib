@@ -323,30 +323,21 @@ class CookieSessionUserHandler(AuthBase):
         return binascii.hexlify(data).decode()
 
 
-    def _get_guest_token(self) -> str:
+    def _get_guest_token(self, html: str) -> str:
         """
-        ゲストトークン (Cookie 内の "gt" 値) を取得する
+        Twitter の HTML からゲストトークン (Cookie 内の "gt" 値) を取得する
+        すでに Cookie 内の "gt0" 値がセットされた状態で HTML を取得するとゲストトークンが HTML に埋め込まれないため注意
 
         Returns:
             str: 取得されたトークン
         """
 
-        # HTTP ヘッダーは基本的に認証用セッションのものを使う
-        headers = self._auth_flow_api_headers.copy()
-        headers.pop('x-csrf-token')
-        headers.pop('x-guest-token')
-
-        # API からゲストトークンを取得する
-        # ref: https://github.com/fa0311/TwitterFrontendFlow/blob/master/TwitterFrontendFlow/TwitterFrontendFlow.py#L26-L36
-        guest_token_response = self._session.post('https://api.twitter.com/1.1/guest/activate.json', headers=headers)
-        if guest_token_response.status_code != 200:
-            raise self._get_tweepy_exception(guest_token_response)
-        try:
-            guest_token = guest_token_response.json()['guest_token']
-        except:
+        # document.cookie = "gt=0000000000000000000; Max-Age=10800; Domain=.twitter.com; Path=/; Secure";
+        # のようなフォーマットで HTML に埋め込まれているので、正規表現で抽出する
+        match = re.search(re.compile(r'document.cookie="gt=(\d+); Max-Age='), html)
+        if match is None:
             raise tweepy.TweepyException('Failed to get guest token')
-
-        return guest_token
+        return match.group(1)
 
 
     def _get_ui_metrics(self, js_inst: str) -> Dict[str, Any]:
@@ -468,7 +459,7 @@ class CookieSessionUserHandler(AuthBase):
 
         # まだ取得できていない場合のみ、ゲストトークンを取得し、"gt" としてセッションの Cookie に保存
         if self._session.cookies.get('gt', default=None) is None:
-            guest_token = self._get_guest_token()
+            guest_token = self._get_guest_token(html_response.text)
             self._session.cookies.set('gt', guest_token, domain='.twitter.com')
 
         ## ゲストトークンを認証フロー API 用の HTTP リクエストヘッダーにもセット ("gt" と "x-guest-token" は同じ値になる)
